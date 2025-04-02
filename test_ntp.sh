@@ -17,7 +17,7 @@ sleep 3
 # Check if NTP port is open using nmap (more reliable than nc)
 echo "[1] Checking if NTP port is open..."
 nmap -p 123 -sU $TARGET
-sleep 3
+sleep 10
 
 # Try a simple ntpdate query
 echo "[2] Testing with ntpdate (simple query)..."
