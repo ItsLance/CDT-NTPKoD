@@ -15,11 +15,15 @@ echo "[1] Checking if NTP port is open..."
 nmap -p 123 -sU $TARGET
 
 # Try a simple ntpdate query
-echo "[2] Testing with ntpdate..."
-ntpdate -q -d $TARGET
+echo "[2] Testing with ntpdate (simple query)..."
+ntpdate -q $TARGET
+
+# Try a more detailed ntpdate query
+echo "[3] Testing with ntpdate (detailed query)..."
+ntpdate -d $TARGET
 
 # Try ntpq peek command
-echo "[3] Testing with ntpq..."
+echo "[3] Testing with ntpq...(likely to time out due to ntp.conf but still worth a shot)"
 echo "rv" | ntpq -p $TARGET
 
 echo "==== NTP Server Check completed ===="
