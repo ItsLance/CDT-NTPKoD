@@ -10,6 +10,9 @@ TARGET="$1"
 
 echo "==== Basic NTP Server Check for $TARGET ===="
 
+echo "== Installing necessary packages...==="
+sudo apt install ntp sntp python pip iputils-ping ntpdate nano netcat-traditional netcat-openbsd nmap tcdump
+
 # Check if NTP port is open using nmap (more reliable than nc)
 echo "[1] Checking if NTP port is open..."
 nmap -p 123 -sU $TARGET
