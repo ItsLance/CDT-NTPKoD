@@ -12,6 +12,7 @@ echo "==== Basic NTP Server Check for $TARGET ===="
 
 echo "== Installing necessary packages...==="
 sudo apt install ntp sntp python3 pip iputils-ping ntpdate nano netcat-traditional netcat-openbsd nmap tcpdump
+pip3 install scapy
 sleep 3
 
 # Check if NTP port is open using nmap (more reliable than nc)
