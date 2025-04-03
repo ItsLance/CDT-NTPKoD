@@ -6,6 +6,13 @@ For educational and competition use only.
 
 This script demonstrates various NTP KoD techniques with improved effectiveness
 against vulnerable NTP server implementations.
+
+Essentially, the script is a tool leveraging NTP's design of KoD (Kiss of Death)
+packets and misconfigured ones to send in large at a quick and concentrated rate to trigger a Denial-of-Service for NTP.
+From testing alone, it does not force a shut down of the service, but it is meant to stifle or at least gauge and analyze its implementation.
+It does have implementations from CVE's that it may use.
+
+Author: Lance Cordova
 """
 
 import socket
@@ -838,7 +845,7 @@ def print_banner():
     ║╣ ║║║╠═╝  ╠╩╗║╚═╗╚═╗  ║ ║╠╣    ║║║╣ ╠═╣ ║ ╠═╣
     ╚═╝╩ ╩╩    ╩ ╩╩╚═╝╚═╝  ╚═╝╚    ═╩╝╚═╝╩ ╩ ╩ ╩ ╩
     
-    Enhanced NTP Kiss-of-Death Attack Tool - v2.0
+    NTP Kiss-of-Death Attack Tool - v2.0
     For cybersecurity competitions and educational use only
     """
     print(f"{Colors.RED}{banner}{Colors.ENDC}")
