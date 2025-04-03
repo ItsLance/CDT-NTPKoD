@@ -1,7 +1,13 @@
 #!/bin/bash
 
 # NTP Vulnerability Setup Script
-# This script installs a vulnerable version of NTP and configures it for CVE-2016-9311
+# This script installs a vulnerable version of NTP and configures it for CVE-2016-9311.
+# This is intended to be a proof-of-concept of executing the script,
+# However, this is NOT viable in the current testing environment with the current Incus images
+# From multiple iterations of this script to using things like Docker,
+# there are no deprecated versions of ntp I can find in the given time I had with this assignment locally.
+# It seems to be external. Nonetheless, I leave this script here for documentation and reference for future scripts if desired.
+
 # WARNING: For educational purposes in isolated lab environments only
 
 # Text colors
