@@ -64,12 +64,51 @@ backup_existing_config() {
     echo -e "${GREEN}[+] Backup completed to /root/ntp-backup/${NC}"
 }
 
-# Function to install vulnerable NTP version
-install_vulnerable_ntp() {
-    echo -e "${BLUE}[*] Installing vulnerable NTP version...${NC}"
+# Function to check system requirements
+check_system_requirements() {
+    echo -e "${BLUE}[*] Checking system requirements...${NC}"
+    
+    # Check disk space
+    FREE_SPACE=$(df -k / | awk 'NR==2 {print $4}')
+    if [ "$FREE_SPACE" -lt 1000000 ]; then  # Less than ~1GB
+        echo -e "${YELLOW}[!] Warning: Low disk space. Build process may fail.${NC}"
+    fi
+    
+    # Check memory
+    FREE_MEM=$(free -m | awk 'NR==2 {print $4}')
+    if [ "$FREE_MEM" -lt 512 ]; then  # Less than 512MB
+        echo -e "${YELLOW}[!] Warning: Low memory. Build process may be slow or fail.${NC}"
+    fi
+    
+    # Check internet connectivity
+    if ! ping -c 1 archive.ntp.org &> /dev/null; then
+        echo -e "${YELLOW}[!] Warning: Cannot reach archive.ntp.org. Check internet connection.${NC}"
+    fi
+    
+    echo -e "${GREEN}[+] System requirements checked${NC}"
+}
+
+# Function to install vulnerable NTP using package manager (preferred method)
+install_ntp_package() {
+    echo -e "${BLUE}[*] Installing NTP package...${NC}"
     
     # Remove existing NTP installation
     apt-get remove -y ntp ntpdate &> /dev/null
+    
+    # Install NTP package
+    apt-get update
+    if apt-get install -y ntp; then
+        echo -e "${GREEN}[+] NTP package installed successfully${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}[!] Failed to install NTP package. Will try building from source.${NC}"
+        return 1
+    fi
+}
+
+# Function to install vulnerable NTP from source (fallback method)
+install_vulnerable_ntp_source() {
+    echo -e "${BLUE}[*] Installing vulnerable NTP from source...${NC}"
     
     # Install build dependencies
     echo -e "${BLUE}[*] Installing build dependencies...${NC}"
@@ -78,37 +117,61 @@ install_vulnerable_ntp() {
     
     # Create build directory
     BUILD_DIR=$(mktemp -d)
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR" || { echo -e "${RED}[!] Failed to create build directory${NC}"; exit 1; }
     
     # Download vulnerable NTP version
     echo -e "${BLUE}[*] Downloading NTP 4.2.8p8 (vulnerable to CVE-2016-9311)...${NC}"
-    wget -q http://archive.ntp.org/ntp4/ntp-4.2/ntp-4.2.8p8.tar.gz
-    
-    if [ $? -ne 0 ]; then
+    if ! wget -q http://archive.ntp.org/ntp4/ntp-4.2/ntp-4.2.8p8.tar.gz; then
         echo -e "${RED}[!] Failed to download NTP source. Check your internet connection.${NC}"
-        exit 1
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
     fi
     
     # Extract and build
     echo -e "${BLUE}[*] Extracting and building NTP...${NC}"
-    tar -xzf ntp-4.2.8p8.tar.gz
-    cd ntp-4.2.8p8
-    
-    # Configure and build
-    ./configure --prefix=/usr --enable-all-clocks --enable-parse-clocks &> /dev/null
-    make -j$(nproc) &> /dev/null
-    make install &> /dev/null
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}[!] Failed to build and install NTP${NC}"
-        exit 1
+    if ! tar -xzf ntp-4.2.8p8.tar.gz; then
+        echo -e "${RED}[!] Failed to extract NTP source.${NC}"
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
     fi
     
-    echo -e "${GREEN}[+] Vulnerable NTP version installed successfully${NC}"
+    cd ntp-4.2.8p8 || { echo -e "${RED}[!] Failed to enter source directory${NC}"; return 1; }
+    
+    # Configure with verbose output to help diagnose issues
+    echo -e "${BLUE}[*] Configuring NTP build...${NC}"
+    if ! ./configure --prefix=/usr --enable-all-clocks --enable-parse-clocks; then
+        echo -e "${RED}[!] Configure failed. See output above for details.${NC}"
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
+    fi
+    
+    # Build with verbose output
+    echo -e "${BLUE}[*] Building NTP (this may take a while)...${NC}"
+    if ! make -j"$(nproc)"; then
+        echo -e "${RED}[!] Build failed. See output above for details.${NC}"
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
+    fi
+    
+    # Install
+    echo -e "${BLUE}[*] Installing NTP...${NC}"
+    if ! make install; then
+        echo -e "${RED}[!] Installation failed. See output above for details.${NC}"
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
+    fi
+    
+    echo -e "${GREEN}[+] Vulnerable NTP version installed successfully from source${NC}"
     
     # Clean up build directory
-    cd /
+    cd / || return 1
     rm -rf "$BUILD_DIR"
+    return 0
 }
 
 # Function to create vulnerable NTP configuration
@@ -173,8 +236,10 @@ EOF
     chown -R ntp:ntp /var/log/ntpstats
     chown ntp:ntp /var/log/ntp.log
     
-    # Create systemd service file
-    cat > /etc/systemd/system/ntp.service << 'EOF'
+    # Check if systemd service file already exists
+    if [ ! -f /lib/systemd/system/ntp.service ] && [ ! -f /etc/systemd/system/ntp.service ]; then
+        # Create systemd service file
+        cat > /etc/systemd/system/ntp.service << 'EOF'
 [Unit]
 Description=Network Time Protocol daemon
 Documentation=man:ntpd(8)
@@ -189,8 +254,10 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    
-    echo -e "${GREEN}[+] Created NTP service file${NC}"
+        echo -e "${GREEN}[+] Created NTP service file${NC}"
+    else
+        echo -e "${GREEN}[+] Using existing NTP service file${NC}"
+    fi
     
     # Reload systemd
     systemctl daemon-reload
@@ -202,13 +269,18 @@ start_ntp_service() {
     
     # Enable and start NTP service
     systemctl enable ntp &> /dev/null
-    systemctl start ntp
+    systemctl restart ntp
+    
+    # Wait a moment for the service to start
+    sleep 3
     
     # Check if service is running
     if systemctl is-active --quiet ntp; then
         echo -e "${GREEN}[+] NTP service started successfully${NC}"
     else
         echo -e "${RED}[!] Failed to start NTP service${NC}"
+        echo -e "${YELLOW}[*] Checking NTP service status...${NC}"
+        systemctl status ntp
         echo -e "${YELLOW}[*] Check logs with: journalctl -u ntp${NC}"
     fi
 }
@@ -218,10 +290,12 @@ verify_ntp_setup() {
     echo -e "${BLUE}[*] Verifying NTP setup...${NC}"
     
     # Check if NTP is listening
-    if netstat -tulnp | grep -q ":123"; then
+    if netstat -tulnp 2>/dev/null | grep -q ":123"; then
         echo -e "${GREEN}[+] NTP is listening on port 123${NC}"
     else
         echo -e "${RED}[!] NTP is not listening on port 123${NC}"
+        echo -e "${YELLOW}[*] Checking with ss command...${NC}"
+        ss -ulnp | grep ":123"
     fi
     
     # Wait for NTP to initialize
@@ -230,7 +304,7 @@ verify_ntp_setup() {
     
     # Check NTP associations
     echo -e "${BLUE}[*] Checking NTP associations:${NC}"
-    ntpq -p
+    ntpq -p || echo -e "${RED}[!] ntpq command failed${NC}"
     
     # Check if mode 7 is enabled
     echo -e "${BLUE}[*] Testing if mode 7 is enabled:${NC}"
@@ -242,10 +316,11 @@ verify_ntp_setup() {
     
     # Test for CVE-2016-9311 vulnerability
     echo -e "${BLUE}[*] Testing for CVE-2016-9311 vulnerability...${NC}"
-    if ntpq -c "readvar 0 trap" | grep -q "trap="; then
+    if ntpq -c "readvar 0 trap" 2>/dev/null | grep -q "trap="; then
         echo -e "${GREEN}[+] Server appears to be vulnerable to CVE-2016-9311${NC}"
     else
         echo -e "${RED}[!] Server does not appear to be vulnerable to CVE-2016-9311${NC}"
+        echo -e "${YELLOW}[*] This may be because the trap variables are not set or the server is not fully initialized${NC}"
     fi
 }
 
@@ -293,7 +368,7 @@ cleanup_ntp() {
     systemctl disable ntp
     
     # Remove vulnerable NTP installation
-    echo -e "${BLUE}[*] Removing vulnerable NTP installation...${NC}"
+    echo -e "${BLUE}[*] Removing NTP installation...${NC}"
     apt-get remove --purge -y ntp ntpdate
     apt-get autoremove -y
     
@@ -348,7 +423,18 @@ main() {
     
     # Perform setup
     backup_existing_config
-    install_vulnerable_ntp
+    check_system_requirements
+    
+    # Try installing from package first, fall back to source if needed
+    if ! install_ntp_package; then
+        echo -e "${YELLOW}[!] Package installation failed, trying to build from source...${NC}"
+        if ! install_vulnerable_ntp_source; then
+            echo -e "${RED}[!] Both package and source installation methods failed.${NC}"
+            echo -e "${RED}[!] Please check the error messages above and try to resolve the issues.${NC}"
+            exit 1
+        fi
+    fi
+    
     configure_vulnerable_ntp
     start_ntp_service
     configure_firewall
