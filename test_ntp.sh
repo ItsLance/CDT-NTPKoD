@@ -1,4 +1,12 @@
 #!/bin/bash
+# This is a simple diagnostic script from the attacker to the target to see if NTP is running and working
+# USE: ./test_ntp.sh <IP ADDRESS>
+# Example: ./test_ntp.sh 10.1.0.2
+
+# Note: At times, [2] and [3] of the process may not working 100% of the time likely due to "noquery" in the ntp.conf
+# of the server and may need to be run manually. It is still a good reference for necessary packages and commands to run.
+
+# Author: Lance Cordova
 
 # Check if IP address was provided
 if [ "$#" -ne 1 ]; then
@@ -31,7 +39,7 @@ ntpdate -d $TARGET
 sleep 3
 
 # Try ntpq peek command
-echo "[3] Testing with ntpq...(likely to time out due to ntp.conf but still worth a shot)"
+echo "[4] Testing with ntpq...(likely to time out due to ntp.conf but still worth a shot)"
 echo "rv" | ntpq -p $TARGET
 sleep 5
 
