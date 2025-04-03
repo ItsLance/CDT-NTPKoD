@@ -41,7 +41,9 @@ The script requires:
 ```bash
 Install Python dependencies
 pip install scapy
+```
 
+```bash
 On Linux, you may need additional permissions for packet crafting
 sudo apt-get install libpcap-dev # For Debian/Ubuntu
 ```
@@ -50,8 +52,9 @@ sudo apt-get install libpcap-dev # For Debian/Ubuntu
 
 Basic syntax:
 
+```bash
 sudo python3 ntp-kod-attack.py --target TARGET_IP [options]
-
+```
 
 Root/administrator privileges are required for raw packet manipulation with Scapy.
 
