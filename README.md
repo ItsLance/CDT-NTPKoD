@@ -180,34 +180,35 @@ To observe the effects of the attack:
 
    The --analyze option enables:
 
-   Automatic detection of NTP server version and implementation
-   Probing for specific vulnerabilities
-   Adaptation of attack techniques based on findings
-   More efficient targeting of known weaknesses
+   - Automatic detection of NTP server version and implementation
+   - Probing for specific vulnerabilities
+   - Adaptation of attack techniques based on findings
+   - More efficient targeting of known weaknesses
    
 ### IP Spoofing
-   The --spoof option enables source IP address randomization to:
+   - The --spoof option enables source IP address randomization to:
 
 ### Evade rate limiting based on source IP
-   Make the attack harder to trace
-   Potentially bypass simple firewall rules
-   Note: IP spoofing requires root privileges and may not work on all networks due to egress filtering.
+   - Make the attack harder to trace
+   - Potentially bypass simple firewall rules
+   - **Note:** IP spoofing requires root privileges and may not work on all networks due to egress filtering.
 
 ### Flood Mode
    The --flood option enables:
 
-   Maximum packet transmission rate
-   Minimal delays between packets
-   Higher burst sizes
-   More aggressive resource consumption
-   Warning: This can consume significant bandwidth and system resources.
+   - Maximum packet transmission rate
+   - Minimal delays between packets
+   - Higher burst sizes
+   - More aggressive resource consumption
+   - Warning: This can consume significant bandwidth and system resources.
 
 ### Timing Randomization
    The script implements:
    
-   Variable delays between packet bursts
-   Randomized packet timing within bursts
-   Jitter in the overall packet rate
+   - Variable delays between packet bursts
+   - Randomized packet timing within bursts
+   - Jitter in the overall packet rate
+
    These features help evade detection systems that look for regular traffic patterns.
 
 ## Responsible Use
