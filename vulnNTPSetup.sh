@@ -43,6 +43,49 @@ check_ubuntu() {
     fi
 }
 
+# Function to check if Docker is installed
+check_docker() {
+    if command -v docker &> /dev/null; then
+        echo -e "${GREEN}[+] Docker is installed${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}[!] Docker is not installed${NC}"
+        return 1
+    fi
+}
+
+# Function to install Docker
+install_docker() {
+    echo -e "${BLUE}[*] Installing Docker...${NC}"
+    
+    # Update package index
+    apt-get update
+    
+    # Install prerequisites
+    apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+    
+    # Add Docker's official GPG key
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+    
+    # Add Docker repository
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    
+    # Update package index again
+    apt-get update
+    
+    # Install Docker CE
+    apt-get install -y docker-ce
+    
+    # Check if Docker was installed successfully
+    if command -v docker &> /dev/null; then
+        echo -e "${GREEN}[+] Docker installed successfully${NC}"
+        return 0
+    else
+        echo -e "${RED}[!] Failed to install Docker${NC}"
+        return 1
+    fi
+}
+
 # Function to backup existing NTP configuration
 backup_existing_config() {
     echo -e "${BLUE}[*] Backing up existing NTP configuration...${NC}"
@@ -74,105 +117,39 @@ backup_existing_config() {
     echo -e "${GREEN}[+] Backup completed to /root/ntp-backup/${NC}"
 }
 
-# Function to install vulnerable NTP version
-install_vulnerable_ntp() {
-    echo -e "${BLUE}[*] Installing vulnerable NTP version 4.2.8p8...${NC}"
+# Function to stop existing NTP services
+stop_existing_ntp() {
+    echo -e "${BLUE}[*] Stopping existing NTP services...${NC}"
     
-    # Stop and remove existing NTP installation
-    echo -e "${BLUE}[*] Stopping and removing existing NTP installation...${NC}"
-    systemctl stop ntp &>/dev/null
-    apt-get remove --purge -y ntp ntpdate &>/dev/null
-    
-    # Install build dependencies
-    echo -e "${BLUE}[*] Installing build dependencies...${NC}"
-    apt-get update
-    apt-get install -y build-essential libssl-dev libcap-dev wget
-    
-    # Create build directory
-    BUILD_DIR=$(mktemp -d)
-    cd "$BUILD_DIR" || { echo -e "${RED}[!] Failed to create build directory${NC}"; exit 1; }
-    
-    # Download vulnerable NTP version
-    echo -e "${BLUE}[*] Downloading NTP 4.2.8p8 (vulnerable to CVE-2016-9311)...${NC}"
-    if ! wget -q http://archive.ntp.org/ntp4/ntp-4.2/ntp-4.2.8p8.tar.gz; then
-        echo -e "${RED}[!] Failed to download NTP source. Check your internet connection.${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
-    fi
-    
-    # Extract and build
-    echo -e "${BLUE}[*] Extracting and building NTP...${NC}"
-    if ! tar -xzf ntp-4.2.8p8.tar.gz; then
-        echo -e "${RED}[!] Failed to extract NTP source.${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
-    fi
-    
-    cd ntp-4.2.8p8 || { echo -e "${RED}[!] Failed to enter source directory${NC}"; return 1; }
-    
-    # Configure with verbose output to help diagnose issues
-    echo -e "${BLUE}[*] Configuring NTP build...${NC}"
-    if ! ./configure --prefix=/usr --enable-all-clocks --enable-parse-clocks; then
-        echo -e "${RED}[!] Configure failed. See output above for details.${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
-    fi
-    
-    # Build with verbose output
-    echo -e "${BLUE}[*] Building NTP (this may take a while)...${NC}"
-    if ! make -j"$(nproc)"; then
-        echo -e "${RED}[!] Build failed. See output above for details.${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
-    fi
-    
-    # Install
-    echo -e "${BLUE}[*] Installing NTP...${NC}"
-    if ! make install; then
-        echo -e "${RED}[!] Installation failed. See output above for details.${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
-    fi
-    
-    # Create NTP user if it doesn't exist
-    if ! id -u ntp &>/dev/null; then
-        echo -e "${BLUE}[*] Creating NTP user...${NC}"
-        useradd -r -M -s /sbin/nologin ntp
-    fi
-    
-    # Verify installation
-    if command -v ntpd &> /dev/null; then
-        NTP_VERSION=$(ntpd --version 2>&1)
-        echo -e "${GREEN}[+] Installed NTP version: ${NTP_VERSION}${NC}"
-        if echo "$NTP_VERSION" | grep -q "4.2.8p8"; then
-            echo -e "${GREEN}[+] Successfully installed vulnerable NTP version 4.2.8p8${NC}"
-        else
-            echo -e "${RED}[!] Warning: Installed version does not appear to be 4.2.8p8${NC}"
-        fi
+    # Stop and disable NTP service if it exists
+    if systemctl is-active --quiet ntp; then
+        systemctl stop ntp
+        systemctl disable ntp
+        echo -e "${GREEN}[+] Stopped and disabled NTP service${NC}"
+    elif systemctl is-active --quiet ntpd; then
+        systemctl stop ntpd
+        systemctl disable ntpd
+        echo -e "${GREEN}[+] Stopped and disabled NTPD service${NC}"
     else
-        echo -e "${RED}[!] NTP installation failed - ntpd command not found${NC}"
-        cd / || return 1
-        rm -rf "$BUILD_DIR"
-        return 1
+        echo -e "${YELLOW}[*] No active NTP service found${NC}"
     fi
     
-    # Clean up build directory
-    cd / || return 1
-    rm -rf "$BUILD_DIR"
-    return 0
+    # Kill any remaining NTP processes
+    if pgrep ntpd > /dev/null; then
+        pkill ntpd
+        echo -e "${GREEN}[+] Killed remaining NTP processes${NC}"
+    fi
 }
 
-# Function to create vulnerable NTP configuration
-configure_vulnerable_ntp() {
-    echo -e "${BLUE}[*] Creating vulnerable NTP configuration...${NC}"
+# Function to set up vulnerable NTP using Docker
+setup_docker_ntp() {
+    echo -e "${BLUE}[*] Setting up vulnerable NTP using Docker...${NC}"
     
-    # Create NTP configuration file
-    cat > /etc/ntp.conf << 'EOF'
+    # Create a directory for NTP configuration
+    mkdir -p /etc/ntp-docker
+    
+    # Create vulnerable NTP configuration
+    cat > /etc/ntp-docker/ntp.conf << 'EOF'
 # Basic NTP Configuration with vulnerable settings
 
 # Default restrictions (allow everything for testing)
@@ -216,74 +193,80 @@ trap 127.0.0.1.3 interface
 logfile /var/log/ntp.log
 EOF
     
-    echo -e "${GREEN}[+] Created vulnerable NTP configuration${NC}"
+    # Create Dockerfile for vulnerable NTP
+    cat > /etc/ntp-docker/Dockerfile << 'EOF'
+FROM ubuntu:16.04
+
+RUN apt-get update && \
+    apt-get install -y build-essential libssl-dev libcap-dev wget && \
+    cd /tmp && \
+    wget http://archive.ntp.org/ntp4/ntp-4.2/ntp-4.2.8p8.tar.gz && \
+    tar -xzf ntp-4.2.8p8.tar.gz && \
+    cd ntp-4.2.8p8 && \
+    ./configure --prefix=/usr --enable-all-clocks --enable-parse-clocks && \
+    make && \
+    make install && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/*
+
+COPY ntp.conf /etc/ntp.conf
+
+EXPOSE 123/udp
+
+CMD ["/usr/sbin/ntpd", "-n", "-d", "-g"]
+EOF
     
-    # Create necessary directories
-    mkdir -p /var/lib/ntp
-    mkdir -p /var/log/ntpstats
-    touch /var/log/ntp.log
+    # Build the Docker image
+    echo -e "${BLUE}[*] Building Docker image for vulnerable NTP (this may take a few minutes)...${NC}"
+    cd /etc/ntp-docker
+    if ! docker build -t ntp-vulnerable .; then
+        echo -e "${RED}[!] Failed to build Docker image${NC}"
+        return 1
+    fi
     
-    # Set proper permissions
-    chown -R ntp:ntp /var/lib/ntp
-    chown -R ntp:ntp /var/log/ntpstats
-    chown ntp:ntp /var/log/ntp.log
+    # Stop any existing container
+    docker stop ntp-vulnerable 2>/dev/null || true
+    docker rm ntp-vulnerable 2>/dev/null || true
     
-    # Create systemd service file
-    cat > /etc/systemd/system/ntp.service << 'EOF'
+    # Run the container
+    echo -e "${BLUE}[*] Starting vulnerable NTP container...${NC}"
+    if ! docker run -d --name ntp-vulnerable --restart unless-stopped --net=host ntp-vulnerable; then
+        echo -e "${RED}[!] Failed to start Docker container${NC}"
+        return 1
+    fi
+    
+    # Create a systemd service to start the container on boot
+    cat > /etc/systemd/system/ntp-docker.service << 'EOF'
 [Unit]
-Description=Network Time Protocol daemon
-Documentation=man:ntpd(8)
-After=network.target
+Description=Vulnerable NTP Docker Container
+After=docker.service
+Requires=docker.service
 
 [Service]
-Type=forking
-ExecStart=/usr/sbin/ntpd -u ntp:ntp -g
-Restart=always
-RestartSec=10
-
-# Make the service more vulnerable by limiting resources
-CPUQuota=20%
-MemoryLimit=100M
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker start ntp-vulnerable
+ExecStop=/usr/bin/docker stop ntp-vulnerable
 
 [Install]
 WantedBy=multi-user.target
 EOF
     
-    echo -e "${GREEN}[+] Created NTP service file with resource limits to increase vulnerability${NC}"
-    
-    # Reload systemd
+    # Enable the service
     systemctl daemon-reload
+    systemctl enable ntp-docker
+    
+    echo -e "${GREEN}[+] Vulnerable NTP Docker container is running${NC}"
+    return 0
 }
 
-# Function to start NTP service
-start_ntp_service() {
-    echo -e "${BLUE}[*] Starting vulnerable NTP service...${NC}"
-    
-    # Enable and start NTP service
-    systemctl enable ntp &> /dev/null
-    systemctl start ntp
-    
-    # Wait a moment for the service to start
-    sleep 3
-    
-    # Check if service is running
-    if systemctl is-active --quiet ntp; then
-        echo -e "${GREEN}[+] NTP service started successfully${NC}"
-    else
-        echo -e "${RED}[!] Failed to start NTP service${NC}"
-        echo -e "${YELLOW}[*] Checking NTP service status...${NC}"
-        systemctl status ntp
-        echo -e "${YELLOW}[*] Check logs with: journalctl -u ntp${NC}"
-    fi
-}
-
-# Function to verify NTP configuration
+# Function to verify NTP setup
 verify_ntp_setup() {
     echo -e "${BLUE}[*] Verifying NTP setup...${NC}"
     
-    # Check NTP version
-    echo -e "${BLUE}[*] Checking NTP version:${NC}"
-    ntpd --version
+    # Wait for NTP to initialize
+    echo -e "${BLUE}[*] Waiting for NTP to initialize (15 seconds)...${NC}"
+    sleep 15
     
     # Check if NTP is listening
     echo -e "${BLUE}[*] Checking if NTP is listening on port 123:${NC}"
@@ -295,9 +278,24 @@ verify_ntp_setup() {
         ss -ulnp | grep ":123"
     fi
     
-    # Wait for NTP to initialize
-    echo -e "${BLUE}[*] Waiting for NTP to initialize (10 seconds)...${NC}"
-    sleep 10
+    # Check NTP version in Docker
+    echo -e "${BLUE}[*] Checking NTP version in Docker container:${NC}"
+    docker exec ntp-vulnerable ntpd --version || echo -e "${RED}[!] Failed to get NTP version${NC}"
+    
+    # Check if Docker container is running
+    if docker ps | grep -q ntp-vulnerable; then
+        echo -e "${GREEN}[+] NTP Docker container is running${NC}"
+    else
+        echo -e "${RED}[!] NTP Docker container is not running${NC}"
+        docker ps -a | grep ntp-vulnerable
+    fi
+    
+    # Install ntpq for testing if not already installed
+    if ! command -v ntpq &> /dev/null; then
+        echo -e "${BLUE}[*] Installing ntpq for testing...${NC}"
+        apt-get update
+        apt-get install -y ntp-utils || apt-get install -y ntp
+    fi
     
     # Check NTP associations
     echo -e "${BLUE}[*] Checking NTP associations:${NC}"
@@ -344,12 +342,16 @@ display_setup_info() {
     echo -e "${YELLOW}Server IP: ${IP_ADDR}${NC}"
     echo -e "${YELLOW}NTP Port: 123/UDP${NC}"
     echo -e "${YELLOW}NTP Version: 4.2.8p8 (vulnerable to CVE-2016-9311)${NC}"
+    echo -e "${YELLOW}Running in Docker: Yes${NC}"
     
     echo -e "\n${BLUE}To test the vulnerability:${NC}"
     echo -e "  ntpq -c \"readvar 0 trap\" ${IP_ADDR}"
     
     echo -e "\n${BLUE}To test with the attack script:${NC}"
     echo -e "  sudo python3 ntp_kod.py --target ${IP_ADDR} --technique trap --intensity 10 --duration 60"
+    
+    echo -e "\n${BLUE}To view Docker container logs:${NC}"
+    echo -e "  docker logs ntp-vulnerable"
     
     echo -e "\n${RED}SECURITY WARNING:${NC}"
     echo -e "${RED}This server is intentionally vulnerable. Do not expose it to untrusted networks.${NC}"
@@ -363,21 +365,39 @@ display_setup_info() {
 cleanup_ntp() {
     echo -e "${BLUE}[*] Cleaning up vulnerable NTP setup...${NC}"
     
-    # Stop and disable NTP service
-    systemctl stop ntp
-    systemctl disable ntp
+    # Stop and remove Docker container if it exists
+    if docker ps -a | grep -q ntp-vulnerable; then
+        echo -e "${BLUE}[*] Stopping and removing Docker container...${NC}"
+        docker stop ntp-vulnerable
+        docker rm ntp-vulnerable
+        echo -e "${GREEN}[+] Docker container removed${NC}"
+    fi
     
-    # Remove vulnerable NTP installation
-    echo -e "${BLUE}[*] Removing NTP installation...${NC}"
-    apt-get remove --purge -y ntp ntpdate
-    apt-get autoremove -y
+    # Remove Docker image
+    if docker images | grep -q ntp-vulnerable; then
+        echo -e "${BLUE}[*] Removing Docker image...${NC}"
+        docker rmi ntp-vulnerable
+        echo -e "${GREEN}[+] Docker image removed${NC}"
+    fi
+    
+    # Remove Docker service file
+    if [ -f /etc/systemd/system/ntp-docker.service ]; then
+        echo -e "${BLUE}[*] Removing Docker service file...${NC}"
+        systemctl disable ntp-docker
+        rm -f /etc/systemd/system/ntp-docker.service
+        systemctl daemon-reload
+        echo -e "${GREEN}[+] Docker service file removed${NC}"
+    fi
     
     # Remove configuration files
-    rm -f /etc/ntp.conf
-    rm -f /etc/systemd/system/ntp.service
+    echo -e "${BLUE}[*] Removing configuration files...${NC}"
+    rm -rf /etc/ntp-docker
     
-    # Clean up log files
-    rm -f /var/log/ntp.log
+    # Stop and disable NTP service if it exists
+    if systemctl is-active --quiet ntp; then
+        systemctl stop ntp
+        systemctl disable ntp
+    fi
     
     # Restore original configuration if it exists
     if [ -f /root/ntp-backup/ntp.conf.bak ]; then
@@ -412,7 +432,7 @@ main() {
     fi
     
     # Confirm setup
-    echo -e "${YELLOW}This script will set up an NTP server vulnerable to CVE-2016-9311.${NC}"
+    echo -e "${YELLOW}This script will set up an NTP server vulnerable to CVE-2016-9311 using Docker.${NC}"
     echo -e "${YELLOW}This should ONLY be used in an isolated lab environment.${NC}"
     echo -e "${YELLOW}Continue? (y/n)${NC}"
     read -r confirm
@@ -424,9 +444,22 @@ main() {
     
     # Perform setup
     backup_existing_config
-    install_vulnerable_ntp
-    configure_vulnerable_ntp
-    start_ntp_service
+    stop_existing_ntp
+    
+    # Check if Docker is installed, install if not
+    if ! check_docker; then
+        if ! install_docker; then
+            echo -e "${RED}[!] Failed to install Docker. Cannot continue.${NC}"
+            exit 1
+        fi
+    fi
+    
+    # Set up vulnerable NTP using Docker
+    if ! setup_docker_ntp; then
+        echo -e "${RED}[!] Failed to set up vulnerable NTP using Docker.${NC}"
+        exit 1
+    fi
+    
     configure_firewall
     verify_ntp_setup
     display_setup_info
