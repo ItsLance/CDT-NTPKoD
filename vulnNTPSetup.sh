@@ -197,6 +197,13 @@ EOF
     cat > /etc/ntp-docker/Dockerfile << 'EOF'
 FROM ubuntu:16.04
 
+# Install NTP package first as a fallback
+RUN apt-get update && \
+    apt-get install -y ntp && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Then try to build the vulnerable version from source
 RUN apt-get update && \
     apt-get install -y build-essential libssl-dev libcap-dev wget && \
     cd /tmp && \
@@ -206,6 +213,9 @@ RUN apt-get update && \
     ./configure --prefix=/usr --enable-all-clocks --enable-parse-clocks && \
     make && \
     make install && \
+    # Create necessary directories
+    mkdir -p /var/lib/ntp /var/log/ntpstats && \
+    # Clean up
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/*
 
@@ -213,7 +223,8 @@ COPY ntp.conf /etc/ntp.conf
 
 EXPOSE 123/udp
 
-CMD ["/usr/sbin/ntpd", "-n", "-d", "-g"]
+# Use the correct path to ntpd, with fallback options
+CMD ["/bin/bash", "-c", "if [ -x /usr/sbin/ntpd ]; then /usr/sbin/ntpd -n -d -g; elif [ -x /usr/bin/ntpd ]; then /usr/bin/ntpd -n -d -g; else ntpd -n -d -g; fi"]
 EOF
     
     # Build the Docker image
@@ -232,7 +243,43 @@ EOF
     echo -e "${BLUE}[*] Starting vulnerable NTP container...${NC}"
     if ! docker run -d --name ntp-vulnerable --restart unless-stopped --net=host ntp-vulnerable; then
         echo -e "${RED}[!] Failed to start Docker container${NC}"
-        return 1
+        
+        # Debug information
+        echo -e "${YELLOW}[*] Debug: Checking Docker container logs...${NC}"
+        docker logs ntp-vulnerable
+        
+        # Try alternative approach with simpler image
+        echo -e "${YELLOW}[*] Trying alternative approach with simpler Docker image...${NC}"
+        
+        # Create simpler Dockerfile
+        cat > /etc/ntp-docker/Dockerfile.simple << 'EOF'
+FROM ubuntu:16.04
+
+RUN apt-get update && \
+    apt-get install -y ntp && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY ntp.conf /etc/ntp.conf
+
+EXPOSE 123/udp
+
+CMD ["ntpd", "-n", "-d", "-g"]
+EOF
+        
+        # Build the simpler Docker image
+        if ! docker build -t ntp-vulnerable-simple -f Dockerfile.simple .; then
+            echo -e "${RED}[!] Failed to build simple Docker image${NC}"
+            return 1
+        fi
+        
+        # Run the simpler container
+        if ! docker run -d --name ntp-vulnerable --restart unless-stopped --net=host ntp-vulnerable-simple; then
+            echo -e "${RED}[!] Failed to start simple Docker container${NC}"
+            return 1
+        fi
+        
+        echo -e "${GREEN}[+] Started NTP container with fallback image${NC}"
     fi
     
     # Create a systemd service to start the container on boot
@@ -268,26 +315,32 @@ verify_ntp_setup() {
     echo -e "${BLUE}[*] Waiting for NTP to initialize (15 seconds)...${NC}"
     sleep 15
     
+    # Check if Docker container is running
+    echo -e "${BLUE}[*] Checking if Docker container is running:${NC}"
+    if docker ps | grep -q ntp-vulnerable; then
+        echo -e "${GREEN}[+] NTP Docker container is running${NC}"
+        
+        # Show container details
+        echo -e "${BLUE}[*] Container details:${NC}"
+        docker ps | grep ntp-vulnerable
+    else
+        echo -e "${RED}[!] NTP Docker container is not running${NC}"
+        echo -e "${YELLOW}[*] Checking container status:${NC}"
+        docker ps -a | grep ntp-vulnerable
+        
+        echo -e "${YELLOW}[*] Container logs:${NC}"
+        docker logs ntp-vulnerable
+    fi
+    
     # Check if NTP is listening
     echo -e "${BLUE}[*] Checking if NTP is listening on port 123:${NC}"
     if netstat -tulnp 2>/dev/null | grep -q ":123"; then
         echo -e "${GREEN}[+] NTP is listening on port 123${NC}"
+        netstat -tulnp 2>/dev/null | grep ":123"
     else
         echo -e "${RED}[!] NTP is not listening on port 123${NC}"
         echo -e "${YELLOW}[*] Checking with ss command...${NC}"
         ss -ulnp | grep ":123"
-    fi
-    
-    # Check NTP version in Docker
-    echo -e "${BLUE}[*] Checking NTP version in Docker container:${NC}"
-    docker exec ntp-vulnerable ntpd --version || echo -e "${RED}[!] Failed to get NTP version${NC}"
-    
-    # Check if Docker container is running
-    if docker ps | grep -q ntp-vulnerable; then
-        echo -e "${GREEN}[+] NTP Docker container is running${NC}"
-    else
-        echo -e "${RED}[!] NTP Docker container is not running${NC}"
-        docker ps -a | grep ntp-vulnerable
     fi
     
     # Install ntpq for testing if not already installed
@@ -316,6 +369,12 @@ verify_ntp_setup() {
     else
         echo -e "${RED}[!] Server does not appear to be vulnerable to CVE-2016-9311${NC}"
         echo -e "${YELLOW}[*] This may be because the trap variables are not set or the server is not fully initialized${NC}"
+        
+        # Try to set trap variables manually
+        echo -e "${YELLOW}[*] Attempting to set trap variables manually...${NC}"
+        ntpq -c "trap 127.0.0.1 interface" localhost
+        sleep 2
+        ntpq -c "readvar 0 trap" 2>/dev/null
     fi
 }
 
@@ -373,11 +432,11 @@ cleanup_ntp() {
         echo -e "${GREEN}[+] Docker container removed${NC}"
     fi
     
-    # Remove Docker image
+    # Remove Docker images
     if docker images | grep -q ntp-vulnerable; then
-        echo -e "${BLUE}[*] Removing Docker image...${NC}"
-        docker rmi ntp-vulnerable
-        echo -e "${GREEN}[+] Docker image removed${NC}"
+        echo -e "${BLUE}[*] Removing Docker images...${NC}"
+        docker rmi ntp-vulnerable ntp-vulnerable-simple 2>/dev/null || true
+        echo -e "${GREEN}[+] Docker images removed${NC}"
     fi
     
     # Remove Docker service file
