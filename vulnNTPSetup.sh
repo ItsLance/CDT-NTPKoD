@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# NTP Vulnerable Setup Script
+# NTP Vulnerable Setup Script for Ubuntu
 # This script sets up an NTP server vulnerable to CVE-2016-9311 for educational testing
 # Author: Lance Cordova
 # WARNING: For use in isolated lab environments only
@@ -30,6 +30,16 @@ check_root() {
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}[!] This script must be run as root${NC}"
         exit 1
+    fi
+}
+
+# Function to check Ubuntu version
+check_ubuntu() {
+    if [ -f /etc/lsb-release ]; then
+        source /etc/lsb-release
+        echo -e "${BLUE}[*] Detected Ubuntu ${DISTRIB_RELEASE}${NC}"
+    else
+        echo -e "${YELLOW}[!] This script is optimized for Ubuntu. Your system may not be fully compatible.${NC}"
     fi
 }
 
@@ -64,56 +74,19 @@ backup_existing_config() {
     echo -e "${GREEN}[+] Backup completed to /root/ntp-backup/${NC}"
 }
 
-# Function to check system requirements
-check_system_requirements() {
-    echo -e "${BLUE}[*] Checking system requirements...${NC}"
+# Function to install vulnerable NTP version
+install_vulnerable_ntp() {
+    echo -e "${BLUE}[*] Installing vulnerable NTP version 4.2.8p8...${NC}"
     
-    # Check disk space
-    FREE_SPACE=$(df -k / | awk 'NR==2 {print $4}')
-    if [ "$FREE_SPACE" -lt 1000000 ]; then  # Less than ~1GB
-        echo -e "${YELLOW}[!] Warning: Low disk space. Build process may fail.${NC}"
-    fi
-    
-    # Check memory
-    FREE_MEM=$(free -m | awk 'NR==2 {print $4}')
-    if [ "$FREE_MEM" -lt 512 ]; then  # Less than 512MB
-        echo -e "${YELLOW}[!] Warning: Low memory. Build process may be slow or fail.${NC}"
-    fi
-    
-    # Check internet connectivity
-    if ! ping -c 1 archive.ntp.org &> /dev/null; then
-        echo -e "${YELLOW}[!] Warning: Cannot reach archive.ntp.org. Check internet connection.${NC}"
-    fi
-    
-    echo -e "${GREEN}[+] System requirements checked${NC}"
-}
-
-# Function to install vulnerable NTP using package manager (preferred method)
-install_ntp_package() {
-    echo -e "${BLUE}[*] Installing NTP package...${NC}"
-    
-    # Remove existing NTP installation
-    apt-get remove -y ntp ntpdate &> /dev/null
-    
-    # Install NTP package
-    apt-get update
-    if apt-get install -y ntp; then
-        echo -e "${GREEN}[+] NTP package installed successfully${NC}"
-        return 0
-    else
-        echo -e "${YELLOW}[!] Failed to install NTP package. Will try building from source.${NC}"
-        return 1
-    fi
-}
-
-# Function to install vulnerable NTP from source (fallback method)
-install_vulnerable_ntp_source() {
-    echo -e "${BLUE}[*] Installing vulnerable NTP from source...${NC}"
+    # Stop and remove existing NTP installation
+    echo -e "${BLUE}[*] Stopping and removing existing NTP installation...${NC}"
+    systemctl stop ntp &>/dev/null
+    apt-get remove --purge -y ntp ntpdate &>/dev/null
     
     # Install build dependencies
     echo -e "${BLUE}[*] Installing build dependencies...${NC}"
     apt-get update
-    apt-get install -y build-essential libssl-dev libcap-dev
+    apt-get install -y build-essential libssl-dev libcap-dev wget
     
     # Create build directory
     BUILD_DIR=$(mktemp -d)
@@ -166,7 +139,27 @@ install_vulnerable_ntp_source() {
         return 1
     fi
     
-    echo -e "${GREEN}[+] Vulnerable NTP version installed successfully from source${NC}"
+    # Create NTP user if it doesn't exist
+    if ! id -u ntp &>/dev/null; then
+        echo -e "${BLUE}[*] Creating NTP user...${NC}"
+        useradd -r -M -s /sbin/nologin ntp
+    fi
+    
+    # Verify installation
+    if command -v ntpd &> /dev/null; then
+        NTP_VERSION=$(ntpd --version 2>&1)
+        echo -e "${GREEN}[+] Installed NTP version: ${NTP_VERSION}${NC}"
+        if echo "$NTP_VERSION" | grep -q "4.2.8p8"; then
+            echo -e "${GREEN}[+] Successfully installed vulnerable NTP version 4.2.8p8${NC}"
+        else
+            echo -e "${RED}[!] Warning: Installed version does not appear to be 4.2.8p8${NC}"
+        fi
+    else
+        echo -e "${RED}[!] NTP installation failed - ntpd command not found${NC}"
+        cd / || return 1
+        rm -rf "$BUILD_DIR"
+        return 1
+    fi
     
     # Clean up build directory
     cd / || return 1
@@ -189,7 +182,11 @@ restrict default kod nomodify notrap nopeer
 restrict 127.0.0.1
 restrict ::1
 
-# Server configuration - use public servers
+# Server configuration - use local clock as fallback
+server 127.127.1.0
+fudge 127.127.1.0 stratum 10
+
+# External servers
 server 0.pool.ntp.org
 server 1.pool.ntp.org
 server 2.pool.ntp.org
@@ -226,20 +223,13 @@ EOF
     mkdir -p /var/log/ntpstats
     touch /var/log/ntp.log
     
-    # Create NTP user if it doesn't exist
-    if ! id -u ntp &>/dev/null; then
-        useradd -r -M -s /sbin/nologin ntp
-    fi
-    
     # Set proper permissions
     chown -R ntp:ntp /var/lib/ntp
     chown -R ntp:ntp /var/log/ntpstats
     chown ntp:ntp /var/log/ntp.log
     
-    # Check if systemd service file already exists
-    if [ ! -f /lib/systemd/system/ntp.service ] && [ ! -f /etc/systemd/system/ntp.service ]; then
-        # Create systemd service file
-        cat > /etc/systemd/system/ntp.service << 'EOF'
+    # Create systemd service file
+    cat > /etc/systemd/system/ntp.service << 'EOF'
 [Unit]
 Description=Network Time Protocol daemon
 Documentation=man:ntpd(8)
@@ -251,13 +241,15 @@ ExecStart=/usr/sbin/ntpd -u ntp:ntp -g
 Restart=always
 RestartSec=10
 
+# Make the service more vulnerable by limiting resources
+CPUQuota=20%
+MemoryLimit=100M
+
 [Install]
 WantedBy=multi-user.target
 EOF
-        echo -e "${GREEN}[+] Created NTP service file${NC}"
-    else
-        echo -e "${GREEN}[+] Using existing NTP service file${NC}"
-    fi
+    
+    echo -e "${GREEN}[+] Created NTP service file with resource limits to increase vulnerability${NC}"
     
     # Reload systemd
     systemctl daemon-reload
@@ -269,7 +261,7 @@ start_ntp_service() {
     
     # Enable and start NTP service
     systemctl enable ntp &> /dev/null
-    systemctl restart ntp
+    systemctl start ntp
     
     # Wait a moment for the service to start
     sleep 3
@@ -289,7 +281,12 @@ start_ntp_service() {
 verify_ntp_setup() {
     echo -e "${BLUE}[*] Verifying NTP setup...${NC}"
     
+    # Check NTP version
+    echo -e "${BLUE}[*] Checking NTP version:${NC}"
+    ntpd --version
+    
     # Check if NTP is listening
+    echo -e "${BLUE}[*] Checking if NTP is listening on port 123:${NC}"
     if netstat -tulnp 2>/dev/null | grep -q ":123"; then
         echo -e "${GREEN}[+] NTP is listening on port 123${NC}"
     else
@@ -346,10 +343,13 @@ display_setup_info() {
     echo -e "\n${GREEN}=== NTP Vulnerable Server Setup Complete ===${NC}"
     echo -e "${YELLOW}Server IP: ${IP_ADDR}${NC}"
     echo -e "${YELLOW}NTP Port: 123/UDP${NC}"
-    echo -e "${YELLOW}Vulnerable to: CVE-2016-9311${NC}"
+    echo -e "${YELLOW}NTP Version: 4.2.8p8 (vulnerable to CVE-2016-9311)${NC}"
     
     echo -e "\n${BLUE}To test the vulnerability:${NC}"
     echo -e "  ntpq -c \"readvar 0 trap\" ${IP_ADDR}"
+    
+    echo -e "\n${BLUE}To test with the attack script:${NC}"
+    echo -e "  sudo python3 ntp_kod.py --target ${IP_ADDR} --technique trap --intensity 10 --duration 60"
     
     echo -e "\n${RED}SECURITY WARNING:${NC}"
     echo -e "${RED}This server is intentionally vulnerable. Do not expose it to untrusted networks.${NC}"
@@ -403,6 +403,7 @@ cleanup_ntp() {
 main() {
     display_banner
     check_root
+    check_ubuntu
     
     # Check if cleanup mode is requested
     if [ "$1" == "--cleanup" ]; then
@@ -423,18 +424,7 @@ main() {
     
     # Perform setup
     backup_existing_config
-    check_system_requirements
-    
-    # Try installing from package first, fall back to source if needed
-    if ! install_ntp_package; then
-        echo -e "${YELLOW}[!] Package installation failed, trying to build from source...${NC}"
-        if ! install_vulnerable_ntp_source; then
-            echo -e "${RED}[!] Both package and source installation methods failed.${NC}"
-            echo -e "${RED}[!] Please check the error messages above and try to resolve the issues.${NC}"
-            exit 1
-        fi
-    fi
-    
+    install_vulnerable_ntp
     configure_vulnerable_ntp
     start_ntp_service
     configure_firewall
